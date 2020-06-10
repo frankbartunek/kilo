@@ -134,6 +134,7 @@ enum KEY_ACTION{
         PAGE_UP,
         PAGE_DOWN
 };
+ int complete=0;
 
 void editorSetStatusMessage(const char *fmt, ...);
 
@@ -240,7 +241,7 @@ int editorReadKey(int fd) {
     int nread;
     char c, seq[3];
     while ((nread = read(fd,&c,1)) == 0);
-    if (nread == -1) exit(1);
+    if (nread == -1) complete=1;
 
     while(1) {
         switch(c) {
@@ -783,7 +784,7 @@ int editorOpen(char *filename) {
     if (!fp) {
         if (errno != ENOENT) {
             perror("Opening file");
-            exit(1);
+            complete=1;
         }
         return 1;
     }
@@ -1182,7 +1183,7 @@ void editorProcessKeypress(int fd) {
             quit_times--;
             return;
         }
-        exit(0);
+        complete=1;
         break;
     case CTRL_S:        /* Ctrl-s */
         editorSave();
@@ -1247,7 +1248,7 @@ void initEditor(void) {
                       &E.screenrows,&E.screencols) == -1)
     {
         perror("Unable to query the screen for size (columns / rows)");
-        exit(1);
+        complete=1;
     }
     E.screenrows -= 2; /* Get room for status bar. */
 }
@@ -1255,18 +1256,20 @@ void initEditor(void) {
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,"Usage: kilo <filename>\n");
-        exit(1);
+        exit(0);
     }
-
+    complete=0;
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
     editorOpen(argv[1]);
     enableRawMode(STDIN_FILENO);
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
-    while(1) {
+    while(complete==0) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
     }
+    disableRawMode(STDIN_FILENO);
+    system("clear");
     return 0;
 }
