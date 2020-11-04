@@ -34,22 +34,25 @@
 
 #define KILO_VERSION "0.0.1"
 
-#define _BSD_SOURCE
-#define _GNU_SOURCE
+#ifdef __linux__
+#define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <termios.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <errno.h>
 #include <string.h>
-#include <stdlib.h>
 #include <ctype.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include <signal.h>
 
 /* Syntax highlight types */
 #define HL_NORMAL 0
@@ -134,8 +137,8 @@ enum KEY_ACTION{
         PAGE_UP,
         PAGE_DOWN
 };
- int complete=0;
 
+int completed=0;
 void editorSetStatusMessage(const char *fmt, ...);
 
 /* =========================== Syntax highlights DB =========================
@@ -160,14 +163,25 @@ void editorSetStatusMessage(const char *fmt, ...);
  * There is no support to highlight patterns currently. */
 
 /* C / C++ */
-char *C_HL_extensions[] = {".c",".cpp",NULL};
+char *C_HL_extensions[] = {".c",".h",".cpp",".hpp",".cc",NULL};
 char *C_HL_keywords[] = {
-        /* A few C / C++ keywords */
-        "switch","if","while","for","break","continue","return","else",
-        "struct","union","typedef","static","enum","class",
-        /* C types */
+	/* C Keywords */
+	"auto","break","case","continue","default","do","else","enum",
+	"extern","for","goto","if","register","return","sizeof","static",
+	"struct","switch","typedef","union","volatile","while","NULL",
+
+	/* C++ Keywords */
+	"alignas","alignof","and","and_eq","asm","bitand","bitor","class",
+	"compl","constexpr","const_cast","deltype","delete","dynamic_cast",
+	"explicit","export","false","friend","inline","mutable","namespace",
+	"new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
+	"private","protected","public","reinterpret_cast","static_assert",
+	"static_cast","template","this","thread_local","throw","true","try",
+	"typeid","typename","virtual","xor","xor_eq",
+
+	/* C types */
         "int|","long|","double|","float|","char|","unsigned|","signed|",
-        "void|",NULL
+        "void|","short|","auto|","const|","bool|",NULL
 };
 
 /* Here we define an array of syntax highlights by extensions, keywords,
@@ -241,7 +255,7 @@ int editorReadKey(int fd) {
     int nread;
     char c, seq[3];
     while ((nread = read(fd,&c,1)) == 0);
-    if (nread == -1) complete=1;
+    if (nread == -1) completed=1;
 
     while(1) {
         switch(c) {
@@ -541,13 +555,21 @@ void editorSelectSyntaxHighlight(char *filename) {
 
 /* Update the rendered version and the syntax highlight of a row. */
 void editorUpdateRow(erow *row) {
-    int tabs = 0, nonprint = 0, j, idx;
+    unsigned int tabs = 0, nonprint = 0;
+    int j, idx;
 
    /* Create a version of the row we can directly print on the screen,
      * respecting tabs, substituting non printable characters with '?'. */
     free(row->render);
     for (j = 0; j < row->size; j++)
         if (row->chars[j] == TAB) tabs++;
+
+    unsigned long long allocsize =
+        (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
+    if (allocsize > UINT32_MAX) {
+        printf("Some line of the edited file is too long for kilo\n");
+        completed=1;
+    }
 
     row->render = malloc(row->size + tabs*8 + nonprint*9 + 1);
     idx = 0;
@@ -778,13 +800,15 @@ int editorOpen(char *filename) {
 
     E.dirty = 0;
     free(E.filename);
-    E.filename = strdup(filename);
+    size_t fnlen = strlen(filename)+1;
+    E.filename = malloc(fnlen);
+    memcpy(E.filename,filename,fnlen);
 
     fp = fopen(filename,"r");
     if (!fp) {
         if (errno != ENOENT) {
             perror("Opening file");
-            complete=1;
+            completed=1;
         }
         return 1;
     }
@@ -999,6 +1023,7 @@ void editorFind(int fd) {
 #define FIND_RESTORE_HL do { \
     if (saved_hl) { \
         memcpy(E.row[saved_hl_line].hl,saved_hl, E.row[saved_hl_line].rsize); \
+        free(saved_hl); \
         saved_hl = NULL; \
     } \
 } while (0)
@@ -1183,7 +1208,7 @@ void editorProcessKeypress(int fd) {
             quit_times--;
             return;
         }
-        complete=1;
+        completed=1;
         break;
     case CTRL_S:        /* Ctrl-s */
         editorSave();
@@ -1234,6 +1259,22 @@ int editorFileWasModified(void) {
     return E.dirty;
 }
 
+void updateWindowSize(void) {
+    if (getWindowSize(STDIN_FILENO,STDOUT_FILENO,
+                      &E.screenrows,&E.screencols) == -1) {
+        perror("Unable to query the screen for size (columns / rows)");
+        completed=1;
+    }
+    E.screenrows -= 2; /* Get room for status bar. */
+}
+
+void handleSigWinCh(int unused __attribute__((unused))) {
+    updateWindowSize();
+    if (E.cy > E.screenrows) E.cy = E.screenrows - 1;
+    if (E.cx > E.screencols) E.cx = E.screencols - 1;
+    editorRefreshScreen();
+}
+
 void initEditor(void) {
     E.cx = 0;
     E.cy = 0;
@@ -1244,32 +1285,26 @@ void initEditor(void) {
     E.dirty = 0;
     E.filename = NULL;
     E.syntax = NULL;
-    if (getWindowSize(STDIN_FILENO,STDOUT_FILENO,
-                      &E.screenrows,&E.screencols) == -1)
-    {
-        perror("Unable to query the screen for size (columns / rows)");
-        complete=1;
-    }
-    E.screenrows -= 2; /* Get room for status bar. */
+    updateWindowSize();
+    signal(SIGWINCH, handleSigWinCh);
 }
 
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr,"Usage: kilo <filename>\n");
-        exit(0);
+        return 1;
     }
-    complete=0;
+    completed=0;
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
     editorOpen(argv[1]);
     enableRawMode(STDIN_FILENO);
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
-    while(complete==0) {
+    while(completed==0) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
     }
-    disableRawMode(STDIN_FILENO);
-    system("clear");
+   system("clear");
     return 0;
 }
