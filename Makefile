@@ -5,3 +5,6 @@ kilo: kilo.c
 
 clean:
 	rm kilo
+
+install:
+	install kilo $(DESTDIR)$(PREFIX)/bin/kilo
