@@ -200,6 +200,7 @@ struct editorSyntax HLDB[] = {
 /* ======================= Low level terminal handling ====================== */
 
 static struct termios orig_termios; /* In order to restore at exit.*/
+int atExit=0;
 
 void disableRawMode(int fd) {
     /* Don't even check the return value as it's too late. */
@@ -254,9 +255,9 @@ int editorReadKey(int fd) {
     int nread;
     char c, seq[3];
     while ((nread = read(fd,&c,1)) == 0);
-    if (nread == -1) exit(1);
+    if (nread == -1) atExit=1;;
 
-    while(1) {
+    while(atExit==0) {
         switch(c) {
         case ESC:    /* escape sequence */
             /* If this is just an ESC, we'll timeout here. */
@@ -567,7 +568,7 @@ void editorUpdateRow(erow *row) {
         (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
     if (allocsize > UINT32_MAX) {
         printf("Some line of the edited file is too long for kilo\n");
-        exit(1);
+        atExit=1;
     }
 
     row->render = malloc(row->size + tabs*8 + nonprint*9 + 1);
@@ -807,7 +808,7 @@ int editorOpen(char *filename) {
     if (!fp) {
         if (errno != ENOENT) {
             perror("Opening file");
-            exit(1);
+            atExit=1;;
         }
         return 1;
     }
@@ -1031,7 +1032,7 @@ void editorFind(int fd) {
     int saved_cx = E.cx, saved_cy = E.cy;
     int saved_coloff = E.coloff, saved_rowoff = E.rowoff;
 
-    while(1) {
+    while(atExit==0) {
         editorSetStatusMessage(
             "Search: %s (Use ESC/Arrows/Enter)", query);
         editorRefreshScreen();
@@ -1262,7 +1263,7 @@ void updateWindowSize(void) {
     if (getWindowSize(STDIN_FILENO,STDOUT_FILENO,
                       &E.screenrows,&E.screencols) == -1) {
         perror("Unable to query the screen for size (columns / rows)");
-        exit(1);
+        atExit=1;;
     }
     E.screenrows -= 2; /* Get room for status bar. */
 }
@@ -1289,9 +1290,10 @@ void initEditor(void) {
 }
 
 int main(int argc, char **argv) {
+    atExit=0;
     if (argc != 2) {
         fprintf(stderr,"Usage: kilo <filename>\n");
-        exit(1);
+        atExit=1;
     }
 
     initEditor();
@@ -1300,9 +1302,10 @@ int main(int argc, char **argv) {
     enableRawMode(STDIN_FILENO);
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
-    while(1) {
+    while(atExit==0) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
     }
+    editorAtExit();
     return 0;
 }
