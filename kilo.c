@@ -1295,13 +1295,15 @@ int main(int argc, char **argv) {
         fprintf(stderr,"Usage: kilo <filename>\n");
         atExit=1;
     }
-
+    if(atExit==0)
+{
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
     editorOpen(argv[1]);
     enableRawMode(STDIN_FILENO);
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
+}
     while(atExit==0) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
